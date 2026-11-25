@@ -1,13 +1,13 @@
 """AXIS 0.6 closed-candle paper simulator. No exchange orders."""
 import argparse, json, math, sqlite3, time, urllib.request
-import model
+import model, market, os
 from datetime import datetime, timezone
 from pathlib import Path
 
 HOUR=3600000
 CAPITAL,FEE,SLIP,STOP,TARGET,MAX_DD=50.,.001,.0005,.018,.036,.10
 
-def fetch():
+def fetch_bybit():
     now=int(time.time()*1000);end=now;all_rows={}
     for _ in range(3):
         url=f'https://api.bybit.com/v5/market/kline?category=spot&symbol=BTCUSDT&interval=60&limit=1000&end={end}'
@@ -23,6 +23,15 @@ def fetch():
         end=min(int(x[0]) for x in rows)-1
         if len(rows)<1000:break
     return list(all_rows.values())
+
+def source():
+    value=os.environ.get('AXIS_FEED','coinbase')
+    if value=='coinbase':return market.SOURCE
+    if value=='bybit':return 'Bybit BTCUSDT 1h'
+    raise ValueError('Unknown AXIS_FEED')
+
+def fetch():
+    return market.fetch() if source()==market.SOURCE else fetch_bybit()
 
 def validate(rows):
     a=sorted(rows)
@@ -40,7 +49,7 @@ def connect(path):
     return db
 
 def initial():
-    return dict(version='0.6',cash=CAPITAL,equity=CAPITAL,peak=CAPITAL,dd=0.,last=None,pos=None,pending=False,halt=False,fees=0.,closed=0,wins=0,source='Bybit BTCUSDT 1h',last_run=None,last_error=None,ml=None,pending_mode=0,pending_probability=None)
+    return dict(version='0.6',cash=CAPITAL,equity=CAPITAL,peak=CAPITAL,dd=0.,last=None,pos=None,pending=False,halt=False,fees=0.,closed=0,wins=0,source=source(),last_run=None,last_error=None,ml=None,pending_mode=0,pending_probability=None)
 
 def read(db):
     r=db.execute('SELECT payload FROM state WHERE id=1').fetchone()
@@ -71,6 +80,7 @@ def advance(db,rows,now=None):
     try:
         s=read(db)
         if s.get('version')!='0.6':raise ValueError('Use a fresh DB for 0.6; previous strategy state is not migrated')
+        if s['source']!=source():raise ValueError('Market source mismatch: use separate DB; do not mix venues')
         last=s['last'];positions={x[0]:i for i,x in enumerate(a)}
         if last is None:
             i=len(a)-1;s['last']=a[i][0];s['pending']=ml_signal(a,i,s,db);event(db,s['last'],'START',cash=s['cash'])
@@ -119,7 +129,7 @@ def export(db,path):
     path=Path(path);tmp=path.with_suffix('.tmp');tmp.write_text(json.dumps(s,indent=2,ensure_ascii=False),encoding='utf-8');tmp.replace(path)
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--db',default='axis06.sqlite');p.add_argument('--once',action='store_true');p.add_argument('--export',default='status.json');p.add_argument('--interval',type=int,default=300);args=p.parse_args();db=connect(args.db)
+    p=argparse.ArgumentParser();p.add_argument('--db',default='axis061-'+os.environ.get('AXIS_FEED','coinbase')+'.sqlite');p.add_argument('--once',action='store_true');p.add_argument('--export',default='status.json');p.add_argument('--interval',type=int,default=300);args=p.parse_args();db=connect(args.db)
     while True:
         try:tick(db);code=0
         except Exception as e:print('DATA ERROR:',e,flush=True);code=1

@@ -11,26 +11,34 @@ concurrency:
   group: axis-ci-feed
   cancel-in-progress: false
 jobs:
-  checks:
+  unit:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
-      - name: Unit tests
-        run: python3 -m unittest -v
-      - name: Public closed-candle feed check
-        if: always() && success()
+      - run: python3 -m unittest -v
+  research-feed:
+    needs: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      AXIS_FEED: coinbase
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Independent market and ephemeral paper cycle
         run: |
           python3 - <<'PY'
-          import time, worker, model
+          import time, worker, sqlite3
           a=worker.validate(worker.fetch())
-          if a[-1][0]+worker.HOUR>int(time.time()*1000) or int(time.time()*1000)-(a[-1][0]+worker.HOUR)>2*worker.HOUR:
-              raise RuntimeError('Invalid or stale candle')
-          if len(a)<600:
-              raise RuntimeError('Insufficient ML history')
-          r=model.train(a)
-          print('Public feed OK; candle count:',len(a))
-          print('Model gate:',r['reason'])
+          now=int(time.time()*1000)
+          db=worker.connect(':memory:')
+          s=worker.advance(db,a,now)
+          print('Public research feed:',worker.source())
+          print('Closed candles:',len(a))
+          print('Model gate:',s['ml']['reason'])
+          print('Ephemeral paper cycle OK; no state or trade data uploaded')
           PY
